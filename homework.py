@@ -1,13 +1,14 @@
-import os
-import requests
 import logging
-
-import telegram
+import os
+import sys
 import time
+from http import HTTPStatus
 
+import requests
+import telegram
 from dotenv import load_dotenv
 
-from http import HTTPStatus
+from exceptions import OutStatusError
 
 load_dotenv()
 
@@ -36,37 +37,31 @@ logging.basicConfig(
 )
 
 
-class CustomErrorToken(Exception):
-    """Ошибка переменных окружения."""
-
-    pass
-
-
 def check_tokens():
     """Проверка переменных окружения."""
     if not all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
         logging.critical('Проверьте наличие всех переменных окружения')
-        raise CustomErrorToken('Проверьте переменные окружения')
+        raise False
     return True
 
 
-def send_message(bot, message):
+def send_message(bot: telegram.bot, message: str) -> str:
     """Функция отправки сообщения."""
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
         logging.debug('Сообщение успешно отправлено')
-    except Exception as error:
-        logging.error(f'Ошибка при отправке сообщения: {error}')
+    except telegram.error.TelegramError:
+        logging.error('Ошибка при отправке сообщения')
 
 
-def get_api_answer(current_timestamp):
+def get_api_answer(current_timestamp: dict) -> dict:
     """Запрашивает и возвращает API ответ."""
     payload = {'from_date': current_timestamp}
     try:
         homework_statuses = requests.get(
             ENDPOINT, headers=HEADERS, params=payload)
         response = homework_statuses.json()
-    except Exception:
+    except requests.RequestException:
         logging.error('Ошибка при получении ответа API')
     if homework_statuses.status_code != HTTPStatus.OK:
         logging.error('Эндпоинт не доступен')
@@ -74,20 +69,20 @@ def get_api_answer(current_timestamp):
     return response
 
 
-def check_response(response):
+def check_response(response: dict) -> list:
     """Проверяет ответ API на соответствие документации."""
     logging.debug('Проверка API')
     if not isinstance(response, dict):
         raise TypeError('Ответ API не является словарём')
     homework = response.get('homeworks')
-    if homework is None:
+    if not homework:
         raise KeyError('Ключ "homeworks" не найден')
     if not isinstance(homework, list):
-        raise TypeError('Обьект "homeworks" не является списком')
+        raise TypeError('Обьект "homework" не является списком')
     return homework[0]
 
 
-def parse_status(homework):
+def parse_status(homework: list) -> str:
     """Проверяет статус проверки работы."""
     if 'homework_name' not in homework:
         raise KeyError('Нет домашки"')
@@ -96,7 +91,7 @@ def parse_status(homework):
     homework_name = homework['homework_name']
     status = homework['status']
     if status not in HOMEWORK_VERDICTS:
-        raise KeyError('Не известный статус работы')
+        raise OutStatusError('Не известный статус работы')
     verdict = HOMEWORK_VERDICTS[status]
     message = f'Изменился статус проверки работы "{homework_name}". {verdict}'
     return message
@@ -104,9 +99,10 @@ def parse_status(homework):
 
 def main():
     """Основная логика работы бота."""
-    check_tokens()
+    if not check_tokens():
+        sys.exit(1)
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
-    current_timestamp = 0
+    current_timestamp = int(time.time())
     old_status = ''
     current_status = ''
     while True:
